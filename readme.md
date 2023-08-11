@@ -4,7 +4,7 @@ Lung Nodule Detection module that can be packaged as Monai Application Package. 
 
 <br>
 
-This module is available as a Monai Application Package docker image that can be added to an existing Mercure installation using the docker tag : *mercureimaging/map-monaiclassify:latest*. It will perform lung nodule detection in CT images using the [Lung nodule_ct detection](https://github.com/Project-MONAI/model-zoo/releases/download/hosting_storage_v1/lung_nodule_ct_detection_v0.5.9.zip) MONAI bundle.
+This module is available as a Monai Application Package docker image that can be added to an existing Mercure installation using the docker tag : *mercureimaging/map-monaiclassify*. It will perform lung nodule detection in CT images using the [Lung nodule_ct detection](https://github.com/Project-MONAI/model-zoo/releases/download/hosting_storage_v1/lung_nodule_ct_detection_v0.5.9.zip) MONAI bundle.
 
 <br>
 
@@ -15,7 +15,7 @@ The code can be modified to deploy other detection models in the MONAI model zoo
 # Installation
 
 ## Add module to existing mercure installation
-Follow instructions on [mercure website](https://mercure-imaging.org) on how to add a new module. Use the docker tag *mercureimaging/map-monaiclassify:latest*.
+Follow instructions on [mercure website](https://mercure-imaging.org) on how to add a new module. Use the docker tag *mercureimaging/map-monaiclassify*.
 
 <br>
 
