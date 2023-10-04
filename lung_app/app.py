@@ -1,39 +1,53 @@
 from lung_nodule_classifier_operator import ClassifierOperator
 
-from monai.deploy.core import Application, env
+from monai.deploy.core import Application, AppContext
 from monai.deploy.operators.dicom_data_loader_operator import DICOMDataLoaderOperator
 from monai.deploy.operators.dicom_series_selector_operator import DICOMSeriesSelectorOperator
 from monai.deploy.operators.dicom_series_to_volume_operator import DICOMSeriesToVolumeOperator
 from monai.deploy.operators.dicom_text_sr_writer_operator import DICOMTextSRWriterOperator, EquipmentInfo, ModelInfo
 import os
+from pathlib import Path
+from monai.deploy.conditions import CountCondition
 
-@env(pip_packages=["highdicom>=0.18.2"])
+# @env(pip_packages=["highdicom>=0.18.2"])
 class LungNoduleClassificationApp(Application):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
     def compose(self):
+        # Use command line options over environment variables to init context.
+        app_context: AppContext = Application.init_app_context(self.argv)
+        app_input_path = Path(app_context.input_path)
+        app_output_path = Path(app_context.output_path)
+        model_path = Path(app_context.model_path)
+        print(model_path)
+
         model_info = ModelInfo(
             "MONAI Model for Lung Nodule Detection"
         )
         my_equipment = EquipmentInfo(manufacturer="MONAI Deploy App SDK", manufacturer_model="DICOM SR Writer")
         my_special_tags = {"SeriesDescription": "Not for clinical use"}
-        study_loader_op = DICOMDataLoaderOperator()
-        series_selector_op = DICOMSeriesSelectorOperator(rules=Sample_Rules_Text)
-        series_to_vol_op = DICOMSeriesToVolumeOperator()
-        classifier_op = ClassifierOperator()
-        sr_writer_op = DICOMTextSRWriterOperator(
-            copy_tags=True, model_info=model_info, equipment_info=my_equipment, custom_tags=my_special_tags
-        )  # copy_tags=True to use Study and Patient modules of the original input
-
-        self.add_flow(study_loader_op, series_selector_op, {"dicom_study_list": "dicom_study_list"})
-        self.add_flow(
-            series_selector_op, series_to_vol_op, {"study_selected_series_list": "study_selected_series_list"}
+        study_loader_op = DICOMDataLoaderOperator(
+            self, CountCondition(self, 1), input_folder=app_input_path, name="study_loader_op"
         )
-        self.add_flow(series_to_vol_op, classifier_op, {"image": "image"})
-        self.add_flow(classifier_op, sr_writer_op, {"result_text": "classification_result"})
+        series_selector_op = DICOMSeriesSelectorOperator(self, rules=Sample_Rules_Text, name="series_selector_op")
+        series_to_vol_op = DICOMSeriesToVolumeOperator(self, name="series_to_vol_op")
+        classifier_op = ClassifierOperator(
+            self, app_context=app_context, output_folder=app_output_path, model_path=model_path, name="classifier_op"
+        )
+        # sr_writer_op = DICOMTextSRWriterOperator(
+        #     self, copy_tags=True, model_info=model_info, equipment_info=my_equipment, custom_tags=my_special_tags, output_folder=app_output_path,
+        #     name="sr_writer_op",
+        # )  # copy_tags=True to use Study and Patient modules of the original input
+
+        self.add_flow(study_loader_op, series_selector_op, {("dicom_study_list", "dicom_study_list")})
+        self.add_flow(
+            series_selector_op, series_to_vol_op, {("study_selected_series_list", "study_selected_series_list")}
+        )
+        self.add_flow(series_to_vol_op, classifier_op, {("image", "image")})
+        # self.add_flow(classifier_op, sr_writer_op, {("result_text", "classification_result")})
         # Pass the Study series to the SR writer for copying tags
-        self.add_flow(series_selector_op, sr_writer_op, {"study_selected_series_list": "study_selected_series_list"})
+        # self.add_flow(series_selector_op, sr_writer_op, {("study_selected_series_list", "study_selected_series_list")})
 
 
 # This is a sample series selection rule in JSON, simply selecting a MG series.
@@ -58,6 +72,14 @@ class LungNoduleClassificationApp(Application):
 
 Sample_Rules_Text = """ """
 
+# def test():
+#     app = LungNoduleClassificationApp()
+#     image_dir = "MAP-monaiclassify/input"
+#     print("here")
+#     model_path = "MAP-monaiclassify/model/lung_model.ts"
+#     app.run(input=image_dir, output="MAP-monaiclassify/output", model=model_path)
 
 if __name__ == "__main__":
-    app = BreastClassificationApp(do_run=True)
+    # app = BreastClassificationApp(do_run=True)
+    # test()
+    LungNoduleClassificationApp().run()

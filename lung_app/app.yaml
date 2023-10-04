@@ -1,0 +1,11 @@
+application:
+  title: MONAI Deploy App Package - MONAI Bundle AI App
+  version: 1.0
+  inputFormats: ["file"]
+  outputFormats: ["file"]
+
+resources:
+  cpu: 1
+  gpu: 1
+  memory: 1Gi
+  gpuMemory: 6Gi

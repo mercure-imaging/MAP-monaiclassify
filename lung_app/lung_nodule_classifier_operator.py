@@ -11,6 +11,11 @@ from monai.data import DataLoader, Dataset
 from monai.deploy.core import ExecutionContext, Image, InputContext, IOType, Operator, OutputContext
 from monai.deploy.operators.monai_seg_inference_operator import InMemImageReader
 from monai.apps.detection.networks.retinanet_detector import RetinaNetDetector
+
+from pathlib import Path
+from typing import Dict, Optional
+from monai.deploy.core import AppContext, ConditionType, Fragment, Image, Operator, OperatorSpec
+
 from monai.transforms import (
     Compose,
     EnsureChannelFirst,
@@ -33,13 +38,48 @@ from monai.data.box_utils import convert_box_mode
 from pydicom.uid import generate_uid
 
 
-@md.input("image", Image, IOType.IN_MEMORY)
-@md.output("result_text", Text, IOType.IN_MEMORY)
+# @md.input("image", Image, IOType.IN_MEMORY)
+# @md.output("result_text", Text, IOType.IN_MEMORY)
 class ClassifierOperator(Operator):
-    def __init__(self):
-        super().__init__()
+    
+    DEFAULT_OUTPUT_FOLDER = Path.cwd() / "classification_results"
+    # For testing the app directly, the model should be at the following path.
+    MODEL_LOCAL_PATH = Path(os.environ.get("HOLOSCAN_MODEL_PATH", Path.cwd() / "model/model.ts"))
+
+    def __init__(self,
+                fragment: Fragment,
+                *args,
+                model_name: Optional[str] = "",
+                app_context: AppContext,
+                model_path: Path = MODEL_LOCAL_PATH,
+                output_folder: Path = DEFAULT_OUTPUT_FOLDER,
+                **kwargs,
+                 ):
+        
         self._input_dataset_key = "image"
         self._pred_dataset_key = "pred"
+        self.input_name_image = "image"
+        self.output_name_result = "result_text"
+        # The name of the optional input port for passing data to override the output folder path.
+        self.input_name_output_folder = "output_folder"
+        # The output folder set on the object can be overriden at each compute by data in the optional named input
+        self.output_folder = output_folder
+        # Need the name when there are multiple models loaded
+        # self._model_name = model_name.strip() if isinstance(model_name, str) else ""
+        # Need the path to load the models when they are not loaded in the execution context
+        self.model_path = app_context.model_path
+        # Use AppContect object for getting the loaded models
+        self.app_context = app_context
+        # self.model = self._get_model(self.app_context, self.model_path, self._model_name)
+        super().__init__(fragment, *args, **kwargs)
+
+
+    def setup(self, spec: OperatorSpec):
+        """Set up the operator named input and named output, both are in-memory objects."""
+
+        spec.input(self.input_name_image)
+        spec.input(self.input_name_output_folder).condition(ConditionType.NONE)  # Optional for overriding.
+        spec.output(self.output_name_result).condition(ConditionType.NONE)  # Not forcing a downstream receiver.
 
     def _convert_dicom_metadata_datatype(self, metadata: Dict):
         if not metadata:
@@ -65,18 +105,29 @@ class ClassifierOperator(Operator):
         print("Converted Image object metadata:")
         for k, v in metadata.items():
             print(f"{k}: {v}, type {type(v)}")
+        
+        print("returning from here")
 
         return metadata
 
     def compute(self, op_input: InputContext, op_output: OutputContext, context: ExecutionContext):
-        input_image = op_input.get("image")
+        input_image = op_input.receive(self.input_name_image)
+        if not input_image:
+            raise ValueError("Input image is not found.")
+        if not isinstance(input_image, Image):
+            raise ValueError(f"Input is not the required type: {type(Image)!r}")
+
         _reader = InMemImageReader(input_image)
         input_img_metadata = self._convert_dicom_metadata_datatype(input_image.metadata())
+        print("Back from printing metadata")
         img_name = str(input_img_metadata.get("SeriesInstanceUID", "Img_in_context"))
 
-        output_path = context.output.get().path
 
+        # output_path = context.output.get().path
+
+        print("checking device")
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        print("device being used:", device)
 
         returned_layers = [1,2]
         base_anchor_shapes = [[6,8,4],[8,6,5],[10,10,6]]
@@ -88,7 +139,8 @@ class ClassifierOperator(Operator):
         pre_transforms = self.pre_process(_reader)
         post_transforms = self.post_process()
         
-        model_path = context.models.get().path
+        model_path = self.model_path
+        print(model_path)
         net = torch.jit.load(model_path).to(device)
         detector = RetinaNetDetector(network=net, anchor_generator=anchor_generator, debug=False)
         print("Detector Loaded...")
@@ -118,7 +170,8 @@ class ClassifierOperator(Operator):
         # Testing
         # pred_boxes = [[56.740604400634766, 84.39207458496094, -115.19475555419922, 23.67993927001953, 16.88201904296875, 18.818740844726562]]
         # series_uid = generate_uid()
-        # self.draw_bounding_boxes(pred_boxes, context.input.get().path, context.output.get().path, series_uid)
+        # # self.draw_bounding_boxes(pred_boxes, context.input.get().path, context.output.get().path, series_uid)
+        # self.draw_bounding_boxes(pred_boxes, Path(self.app_context.input_path), Path(self.app_context.output_path), series_uid)
 
         with torch.no_grad():
             for d in dataloader:
@@ -168,9 +221,11 @@ class ClassifierOperator(Operator):
                 print("Post-processing finished...")
 
         series_uid = generate_uid()
-        self.draw_bounding_boxes(confident_boxes, context.input.get().path, context.output.get().path, series_uid)
+        self.draw_bounding_boxes(confident_boxes, Path(self.app_context.input_path), Path(self.app_context.output_path), series_uid)
                 
-        output_folder = context.output.get().path
+        # output_folder = context.output.get().path
+        output_folder = self.output_folder
+        print(output_folder)
 
         output_path = output_folder / "result.json"
         with open(output_path, "w") as fp:
@@ -180,7 +235,7 @@ class ClassifierOperator(Operator):
         with open(output_path, "w") as fp:
             json.dump(result_dict_out, fp)
 
-        op_output.set("Number of nodules detected: " + str(nNodules), "result_text")
+        op_output.emit("Number of nodules detected: " + str(nNodules), "result_text")
 
     def pre_process(self, image_reader) -> Compose:
         intensity_transform = ScaleIntensityRange(
@@ -248,11 +303,15 @@ class ClassifierOperator(Operator):
         return draw_img
     
     def draw_bounding_boxes(self, pred_boxes, input_path, output_path, series_uid):
+        print("Drawing bounding boxes!!")
+        print(input_path, output_path, series_uid)
         lstFilesDCM = []  # create an empty list
-        for dirName, subdirList, fileList in os.walk(input_path):
+        for dirName, subdirList, fileList in sorted(os.walk(input_path)):
             for filename in fileList:
                 if ".dcm" in filename.lower():  # check whether the file's DICOM
                     lstFilesDCM.append(os.path.join(dirName,filename))
+
+        lstFilesDCM.sort()
                     
         # Get ref file
         ds = pydicom.dcmread(lstFilesDCM[0])
@@ -269,6 +328,16 @@ class ClassifierOperator(Operator):
         # The array is sized based on 'ConstPixelDims'
         ArrayDicom = np.zeros(ConstPixelDims, dtype=ds.pixel_array.dtype)
 
+        print("Delta x: ", deltaX)
+        print("Delta y: ", deltaY)
+        print("Delta z: ", deltaZ)
+        print("deltaxpx: ", deltaXpx, "deltaypx: ", deltaYpx)
+        print("pixel spacing: ", pixelSpacing)
+        print("slice thickness: ", sliceThickness)
+
+        print("DCM Files list: ")
+        print(lstFilesDCM)
+
         # loop through all the DICOM files
         for filenameDCM in lstFilesDCM:
             # read the file
@@ -277,22 +346,22 @@ class ClassifierOperator(Operator):
             ArrayDicom[:, :, lstFilesDCM.index(filenameDCM)] = ds.pixel_array
 
         # Creating a directory to store all the new dicom files
-        directory = "updated_dcm_files"
-        parent_dir = output_path
-        output_path_dcm = os.path.join(parent_dir, directory)
-        if not os.path.exists(output_path_dcm):
-            os.mkdir(output_path_dcm)
+        # directory = "updated_dcm_files"
+        # parent_dir = output_path
+        # output_path_dcm = os.path.join(parent_dir, directory)
+        # if not os.path.exists(output_path_dcm):
+        #     os.mkdir(output_path_dcm)
 
         # Deleting existing data in the repo- if any.
-        for filename in os.listdir(output_path_dcm):
-            file_path = os.path.join(output_path_dcm, filename)
-            try:
-                if os.path.isfile(file_path) or os.path.islink(file_path):
-                    os.unlink(file_path)
-                elif os.path.isdir(file_path):
-                    shutil.rmtree(file_path)
-            except Exception as e:
-                print('Failed to delete %s. Reason: %s' % (file_path, e))
+        # for filename in os.listdir(output_path_dcm):
+        #     file_path = os.path.join(output_path_dcm, filename)
+        #     try:
+        #         if os.path.isfile(file_path) or os.path.islink(file_path):
+        #             os.unlink(file_path)
+        #         elif os.path.isdir(file_path):
+        #             shutil.rmtree(file_path)
+        #     except Exception as e:
+        #         print('Failed to delete %s. Reason: %s' % (file_path, e))
 
         # Processing the predicted bounding boxes.
         for pred_box in pred_boxes:
@@ -309,6 +378,7 @@ class ClassifierOperator(Operator):
             # Looping over the volume and checking if that slice is falling in the bounding box depth range.
             for i in range(ArrayDicom.shape[-1]):
                 slicePosMM = (-i * sliceThickness) + deltaZ
+                print(slicePosMM, zmin, zmax)
                 draw_img = ArrayDicom[:, :, i]
                 if slicePosMM <= zmax and slicePosMM >= zmin:
                     print("slice in the right range: {} with value: {}".format(i+1, slicePosMM))
@@ -321,9 +391,9 @@ class ClassifierOperator(Operator):
                         color=(255, 0, 0),  # red for predicted box
                         thickness=1,
                     )
-                    plt.imshow(draw_img, cmap=plt.cm.gray)
-                    plt.show()
-                    plt.savefig(str(output_path) + '/slice' + str(i+1) + '.png')
+                    # plt.imshow(draw_img, cmap=plt.cm.gray)
+                    # plt.show()
+                    # plt.savefig(str(output_path) + '/slice' + str(i+1) + '.png')
                     draw_img = cv2.cvtColor(draw_img, cv2.COLOR_BGR2GRAY)
                     draw_img = self.denormalize_image(draw_img, draw_img_min, draw_img_max)
                 # Save the modified slice back in the original array, so that another bounding box could be drawn on it- if that is the case.
@@ -332,15 +402,15 @@ class ClassifierOperator(Operator):
         # Looping over the array again, to save the final modified slices.
         for i in range(ArrayDicom.shape[-1]):
             dcm_file_in = lstFilesDCM[i]
-            # Compose the filename of the modified DICOM using the new series UID
-            out_filename = series_uid + "#" + dcm_file_in.split('/')[-1]
-            dcm_file_out = output_path_dcm + "/" + out_filename
             # Load the input slice
             ds = pydicom.dcmread(dcm_file_in)
             # Set the new series UID
             ds.SeriesInstanceUID = series_uid
             # Set a UID for this slice (every slice needs to have a unique instance UID)
             ds.SOPInstanceUID = generate_uid()
+            # Compose the filename of the modified DICOM using the new series UID
+            out_filename = series_uid + "#" + str(i+1)
+            dcm_file_out = str(output_path) + "/" + str(out_filename) + ".dcm"
             # Store the updated pixel data of the input image.
             ds.PixelData = ArrayDicom[:, :, i].tobytes()
             # Write the modified DICOM file to the output folder

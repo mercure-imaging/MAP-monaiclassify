@@ -2,3 +2,9 @@ input/
 output/
 myBashScript
 monai_tmp5grhco6r/
+.gitignore
+lung_app/__pycache__
+monai_deploy_app_sdk-0.5.1-py3-none-any.whl
+monai_deploy_app_sdk-0.6.0-py3-none-any.whl
+requirements2.txt
+requirements_latest.txt
