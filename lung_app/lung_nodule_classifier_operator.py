@@ -317,7 +317,7 @@ class ClassifierOperator(Operator):
         ds = pydicom.dcmread(lstFilesDCM[0])
 
         # Load dimensions based on the number of rows, columns, and slices (along the Z axis)
-        ConstPixelDims = (int(ds.Rows), int(ds.Columns), len(lstFilesDCM))
+        ConstPixelDims = (int(ds.Rows), int(ds.Columns), 3, len(lstFilesDCM))
 
         # Getting required values from reference image tags.
         deltaX, deltaY, deltaZ = ds[0x0020,0x0032].value
@@ -342,26 +342,11 @@ class ClassifierOperator(Operator):
         for filenameDCM in lstFilesDCM:
             # read the file
             ds = pydicom.dcmread(filenameDCM)
+            img = ds.pixel_array
+            draw_img, draw_img_min, draw_img_max = self.normalize_image_to_uint8(img)
+            draw_img = cv2.cvtColor(draw_img, cv2.COLOR_GRAY2BGR)
             # store the raw image data
-            ArrayDicom[:, :, lstFilesDCM.index(filenameDCM)] = ds.pixel_array
-
-        # Creating a directory to store all the new dicom files
-        # directory = "updated_dcm_files"
-        # parent_dir = output_path
-        # output_path_dcm = os.path.join(parent_dir, directory)
-        # if not os.path.exists(output_path_dcm):
-        #     os.mkdir(output_path_dcm)
-
-        # Deleting existing data in the repo- if any.
-        # for filename in os.listdir(output_path_dcm):
-        #     file_path = os.path.join(output_path_dcm, filename)
-        #     try:
-        #         if os.path.isfile(file_path) or os.path.islink(file_path):
-        #             os.unlink(file_path)
-        #         elif os.path.isdir(file_path):
-        #             shutil.rmtree(file_path)
-        #     except Exception as e:
-        #         print('Failed to delete %s. Reason: %s' % (file_path, e))
+            ArrayDicom[:, :, :, lstFilesDCM.index(filenameDCM)] = draw_img
 
         # Processing the predicted bounding boxes.
         for pred_box in pred_boxes:
@@ -379,31 +364,38 @@ class ClassifierOperator(Operator):
             for i in range(ArrayDicom.shape[-1]):
                 slicePosMM = (-i * sliceThickness) + deltaZ
                 print(slicePosMM, zmin, zmax)
-                draw_img = ArrayDicom[:, :, i]
+                draw_img = ArrayDicom[:, :, :, i]
+                draw_img = np.ascontiguousarray(draw_img, dtype=np.uint8)
                 if slicePosMM <= zmax and slicePosMM >= zmin:
                     print("slice in the right range: {} with value: {}".format(i+1, slicePosMM))
-                    draw_img, draw_img_min, draw_img_max = self.normalize_image_to_uint8(draw_img)
-                    draw_img = cv2.cvtColor(draw_img, cv2.COLOR_GRAY2BGR)
                     cv2.rectangle(
                         draw_img,
                         pt1=(int((xmin)/pixelSpacing)+deltaXpx, int((ymin)/pixelSpacing)+deltaYpx),
                         pt2=(int((xmax)/pixelSpacing)+deltaXpx, int((ymax)/pixelSpacing)+deltaYpx),
-                        color=(255, 0, 0),  # red for predicted box
+                        color=(0, 0, 255),  # red for predicted box
                         thickness=1,
                     )
                     # plt.imshow(draw_img, cmap=plt.cm.gray)
                     # plt.show()
                     # plt.savefig(str(output_path) + '/slice' + str(i+1) + '.png')
-                    draw_img = cv2.cvtColor(draw_img, cv2.COLOR_BGR2GRAY)
-                    draw_img = self.denormalize_image(draw_img, draw_img_min, draw_img_max)
+                    
                 # Save the modified slice back in the original array, so that another bounding box could be drawn on it- if that is the case.
-                ArrayDicom[:, :, i] = draw_img
+                ArrayDicom[:, :, :, i] = draw_img
 
         # Looping over the array again, to save the final modified slices.
         for i in range(ArrayDicom.shape[-1]):
             dcm_file_in = lstFilesDCM[i]
             # Load the input slice
             ds = pydicom.dcmread(dcm_file_in)
+            ds.PhotometricInterpretation = 'RGB'
+            ds.PixelRepresentation = 0
+            ds.SamplesPerPixel = 3
+            ds.BitsAllocated = 8
+            ds.BitsStored = 8
+            ds.HighBit = 7
+            ds.add_new(0x00280006, 'US', 0)
+            ds.is_little_endian = True
+            ds.fix_meta_info()
             # Set the new series UID
             ds.SeriesInstanceUID = series_uid
             # Set a UID for this slice (every slice needs to have a unique instance UID)
@@ -412,6 +404,14 @@ class ClassifierOperator(Operator):
             out_filename = series_uid + "#" + str(i+1)
             dcm_file_out = str(output_path) + "/" + str(out_filename) + ".dcm"
             # Store the updated pixel data of the input image.
-            ds.PixelData = ArrayDicom[:, :, i].tobytes()
+            draw_img = np.ascontiguousarray(ArrayDicom[:, :, :, i], dtype=np.uint8)
+            draw_img = cv2.cvtColor(draw_img, cv2.COLOR_BGR2RGB)
+            ds.PixelData = draw_img.tobytes()
+            ds.Modality = "OT"
+            del ds.WindowCenter
+            del ds.WindowWidth
+            del ds.RescaleIntercept
+            del ds.RescaleSlope
+            
             # Write the modified DICOM file to the output folder
             ds.save_as(dcm_file_out)
