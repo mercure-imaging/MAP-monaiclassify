@@ -19,6 +19,20 @@ The code can be modified to deploy other detection models in the MONAI model zoo
 ## Add module to existing mercure installation
 Follow instructions on [mercure website](https://mercure-imaging.org) on how to add a new module. Use the docker tag *mercureimaging/map-monaiclassify:latest*.
 
+## Tips
+* Git clone the latest Mercure repo - do a git pull if already installed.
+* `vagrant --dev up` (To get the latest development Mercure with MAP support.)
+* Go to configurations->settings and add the following: "support_root_modules": true
+* Add module - use docker image "mercureimaging/map-monaiclassify:latest"
+* Make sure to select the module type as Monai.
+* Make sure the "requires root user" switch is checked.
+* Go to module settings and add `{"HOLOSCAN_MODEL_PATH":"/opt/holoscan/models/model/lung_model.ts"}` in the environment variables section.
+* If not able to get the latest version of Mercure with MAP support, set the environment like this:
+  `{"HOLOSCAN_MODEL_PATH":"/opt/holoscan/models/model/lung_model.ts", "MONAI_INPUTPATH":"/tmp/data", "MONAI_OUTPUTPATH":"/tmp/output", "HOLOSCAN_INPUT_PATH":"/tmp/data", "HOLOSCAN_OUTPUT_PATH":"/tmp/output"}`
+* If you have a GPU available, install the NVIDIA container toolkit on your machine before enabling GPU. It can make things way faster.
+* Add corresponding rule following the quick start documentation.
+* Send files to Mercure
+
 <br>
 
 ## Build module for local testing, modification, and development
